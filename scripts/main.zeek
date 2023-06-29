@@ -17,7 +17,7 @@ export {
 }
 
 type MetricInfo: record {
-  help: string;
+  help_text: string;
   _type: string;
 };
 
@@ -32,26 +32,36 @@ function fmt_prom_labels(names: vector of string, values: vector of string): str
 # This will do same serialization over and over again. We could
 # serialize to JSON and do it on the manager. If we could get
 # a pointer to a record we could cache it based on that, maybe.
-function fmt_prom_line(m: Telemetry::Metric, metric_infos: table[string, string] of MetricInfo): string {
-  local prefix = gsub(m$opts$prefix, /[.-]/, "_");
-  local name = gsub(m$opts$name, /[-.]/, "_");
-  local labels = fmt_prom_labels(m$opts$labels, m$labels);
+function fmt_prom_line(m: Telemetry::Metric, metric_infos: table[string] of MetricInfo): string {
+  local opts = m$opts;
+  local prefix = gsub(opts$prefix, /[.-]/, "_");
+  local name = gsub(opts$name, /[-.]/, "_");
+  local prom_name = fmt("%s_%s%s", prefix, name, opts$is_total? "_total" : "");
+  local prom_labels = fmt_prom_labels(opts$labels, m$labels);
 
-  if ( [prefix, name] !in metric_infos ) {
-    local _type = to_lower(gsub(cat(m$opts$metric_type), /.+_/, ""));
-    metric_infos[prefix, name] = MetricInfo($help=m$opts$help_text, $_type=_type);
+  if ( prom_name !in metric_infos ) {
+    local _type = to_lower(gsub(cat(opts$metric_type), /.+_/, ""));
+    metric_infos[prom_name] = MetricInfo($help_text=opts$help_text, $_type=_type);
   }
 
-  return fmt("%s_%s%s %s", prefix, name, labels, m$value);
+  local total_str = opts$is_total ? "_total" : "";
+
+  return fmt("%s%s %s", prom_name, prom_labels, m$value);
 }
 
 function do_collection_request(): string {
   local prom_lines: vector of string;
   local metrics = Telemetry::collect_metrics("*", "*");
 
-  local metric_infos: table[string, string] of MetricInfo;
+  local metric_infos: table[string] of MetricInfo;
   for ( _, m in metrics ) {
     prom_lines += fmt_prom_line(m, metric_infos);
+  }
+
+  # Suffix type and help lines.
+  for ( [prom_name], info in metric_infos ) {
+    prom_lines += fmt("# HELP %s %s", prom_name, info$help_text);
+    prom_lines += fmt("# TYPE %s %s", prom_name, info$_type);
   }
 
   return join_string_vec(prom_lines, "\n");
