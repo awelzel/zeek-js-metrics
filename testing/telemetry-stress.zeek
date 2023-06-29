@@ -3,7 +3,7 @@
 global update_interval: interval = 1sec;
 
 global nfamilies = 4;
-global ncounters_per_family = 400;
+global ncounters_per_family = 200;
 
 type Counters: record {
   f: Telemetry::CounterFamily;

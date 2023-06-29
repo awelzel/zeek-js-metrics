@@ -1,65 +1,71 @@
 const http = require('node:http');
 
-var request_id = 0n;
+let global_request_id = 0n;
 const telemetry_requests = new Map();
-const cluster_nodes = Object.keys(zeek.global_vars['Cluster::nodes']).length;
+const telemetry_timeout_ms = 500;
+const cluster_nodes = new Set(Object.keys(zeek.global_vars['Cluster::nodes']));
 
-// Published from other endpoints.
-zeek.on('Telemetry::collection_response', (endpoint, request_id, data) => {
-  console.log(`Response from ${endpoint} request_id=${request_id} ${data.length} bytes`);
-
-  const telemetry_request = telemetry_requests.get(request_id);
-  if ( telemetry_request === undefined ) {
-    console.error(`Unexpected collection_response() for ${endpoint} ${request_id}`)
-    return;
+// Send out whatever was collected for this telemetry_request and cleanup.
+function sendResponse(telemetry_request) {
+  // Check which nodes failed to respond and log a warning...
+  const nodes = new Set(telemetry_request.responses.map((r) => r[0]));
+  if (nodes.size !== cluster_nodes.size) {
+    cluster_nodes.forEach((n) => {
+      if (!nodes.has(n)) console.warn(`Node ${n} failed to respond to request ${telemetry_request.request_id}`);
+    });
   }
 
-  const responses = telemetry_request.responses;
-  responses.push([endpoint, data]);
-
-  if ( responses.length < cluster_nodes ) {
-    // console.log(`More responses expected ${responses.length}/${cluster_nodes}`);
-    return;
-  }
-
-  // Aggregate data.
-  const all_data = responses.map(r => r[1]).join("\n");
-  telemetry_request.res.writeHead(200, {'Content-Type': 'text/plain'});
+  // Aggregate the data. TODO: Help text
+  const all_data = telemetry_request.responses.map((r) => r[1]).join('\n');
+  telemetry_request.res.writeHead(200, { 'Content-Type': 'text/plain' });
   telemetry_request.res.write(all_data);
-  telemetry_request.res.end("\n");
+  telemetry_request.res.end('\n');
 
-  // Cleanup
+  // Clean the map.
+  telemetry_requests.delete(telemetry_request.request_id);
+}
+
+// Collect telemetry responses from other nodes.
+zeek.on('Telemetry::collection_response', (endpoint, request_id, data) => {
+  const telemetry_request = telemetry_requests.get(request_id);
+  if (telemetry_request === undefined) {
+    console.warn(`Unexpected collection_response() for ${endpoint} ${request_id}`);
+    return;
+  }
+
+  telemetry_request.responses.push([endpoint, data]);
+
+  // Are we waiting for more?
+  if (telemetry_request.responses.length < cluster_nodes.size) return;
+
+  sendResponse(telemetry_request);
+
   clearTimeout(telemetry_request.timeout);
-  telemetry_requests.delete(request_id);
-  console.log(`Deleted ${request_id}.. pending requests ${telemetry_requests.size}` ,telemetry_requests);
-
 });
 
 // Cheap metrics server
 const server = http.createServer((req, res) => {
-  ++request_id;
-  console.log(`Request: ${req.method} ${req.url} ${request_id}`);
+  if (req.url !== '/metrics') {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('Try /metrics...\n');
+    return;
+  }
 
-  // Prepare the request...
+  global_request_id += 1n;
+
   const telemetry_request = {
-    request_id: request_id,
-    res: res,
+    request_id: global_request_id,
+    res,
     responses: [],
   };
 
-  // TODO: Make timeout conifgurable...
   telemetry_request.timeout = setTimeout(() => {
-    const my_request_id = request_id;
-    // XXX: This should send whatever we have so far.
-    const this_telemetry_request = telemetry_requests.get(request_id);
-    console.log("timeout");
-    this_telemetry_request.res.writeHead(500, {'Content-Type': 'text/plain'});
-    this_telemetry_request.res.end("timeout");
-    telemetry_requests.delete(my_request_id);
-  }, 1000);
+    sendResponse(telemetry_request);
+  }, telemetry_timeout_ms);
 
-  telemetry_requests.set(request_id, telemetry_request);
+  telemetry_requests.set(telemetry_request.request_id, telemetry_request);
 
-  // Check if we can publish from JavaScript? For now trampoline it.
-  zeek.event('Telemetry::metrics_request', [request_id]);
-}).listen(19911);
+  zeek.invoke('Telemetry::metrics_request_trampoline', [telemetry_request.request_id]);
+});
+
+server.listen(19911);

@@ -4,15 +4,16 @@
 module Telemetry;
 
 export {
-  # Event invoked from JavaScript upon a metrics request
-  global metrics_request: event(request_id: count);
-  global metrics_request_done: event();
-
- # Request/response for telemetry.
+  # Event sent to nodes to trigger collection. Answer expected on reply_topic.
   global collection_request: event(reply_topic: string, request_id: count);
 
- # Data is maybe already Preomtheus formatted, maybe not...
+  # Event sent as response to a collection_request().
   global collection_response: event(endpoint: string, request_id: count, data: string);
+
+  # Simple trampoline function called from JavaScript to publish requests
+  # via Broker and do local collection. Too much any and opaque involved.
+  global metrics_request_trampoline: function(request_id: count);
+
 }
 
 type MetricInfo: record {
@@ -62,10 +63,20 @@ event Telemetry::collection_request(reply_topic: string, request_id: count) {
 }
 
 
+function metrics_request_trampoline(request_id: count) {
+  for ( topic in Cluster::broadcast_topics )
+    Broker::publish(topic, Telemetry::collection_request, Cluster::manager_topic, request_id);
+
+  # Handle local data collection for manager.
+  local data = do_collection_request();
+  event Telemetry::collection_response(Cluster::node, request_id, data);
+}
+
+
 module GLOBAL;
 
 @if ( ! Supervisor::is_supervisor() )
 @if ( ! Cluster::is_enabled() || Cluster::local_node_type() == Cluster::MANAGER )
-@load ./manager.zeek
+@load ./manager.js
 @endif
 @endif

@@ -20,7 +20,7 @@ event zeek_init()
 	cluster["manager"] = [$role=Supervisor::MANAGER, $host=127.0.0.1, $p=10000/tcp];
 	cluster["proxy"] = [$role=Supervisor::PROXY, $host=127.0.0.1, $p=10001/tcp];
 
-	local loggers = 1;
+	local loggers = 3;
 	local i = 0;
 	while ( i < loggers )
 		{
@@ -30,7 +30,7 @@ event zeek_init()
 		cluster[logger_name] = [$role=Supervisor::LOGGER, $host=127.0.0.1, $p=lp];
 		}
 
-	local workers = 16;
+	local workers = 24;
 	local worker_port_offset = 10100;
 	i = 0;
 	while ( i < workers )
@@ -50,13 +50,11 @@ event zeek_init()
 		sn$directory = n;
 		sn$env = table(["ZEEK_DEFAULT_CONNECT_RETRY"] = "1");
 
-    print "XXXXX", n;
     if ( n == "manager") {
 		  sn$env = table(["ZEEK_DEFAULT_CONNECT_RETRY"] = "1");
       sn$env["MALLOC_CONF"] = "stats_print:true;prof:true,prof_prefix:jeprof.out,prof_final:true,lg_prof_interval:28";
       sn$env["LD_PRELOAD"] = "/usr/local/lib/libjemalloc.so";
 
-      print "XXXXX MANAGER XXXX", sn$env;
     }
 
 		if ( ep?$interface )
